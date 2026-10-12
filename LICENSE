@@ -1,0 +1,52 @@
+Feedie Non-Commercial License (GPLv3-derived)
+
+Copyright (c) 2026 Admingyu
+
+This is a custom license based on the GNU General Public License, version 3
+(GPLv3). It is not the standard GNU GPL. The GPLv3 text is available at:
+https://www.gnu.org/licenses/gpl-3.0.html
+
+1. Non-commercial permission
+
+For any Non-Commercial Purpose, you may use, study, copy, modify, and
+redistribute this software, subject to the applicable terms and conditions of
+GPLv3. When redistributing this software or a modified version, include this
+license and comply with the applicable GPLv3 source and notice requirements.
+
+"Non-Commercial Purpose" means personal, educational, research, or nonprofit
+use that is not directed toward commercial advantage or monetary compensation.
+
+2. Commercial use is prohibited
+
+You may not use, distribute, sublicense, sell, or make this software available
+for Commercial Use without prior written permission from the copyright holder.
+Commercial Use includes, without limitation: selling or licensing the software;
+charging for access to it; monetizing it through advertising or sponsorship;
+including it in a paid product or service; offering it as a paid hosted service;
+or using it in the business operations of a for-profit organization.
+
+3. Other materials
+
+This license applies only to original material in this project that the
+copyright holder is authorized to license. Third-party components and assets
+remain subject to their own licenses. This custom license does not change those
+third-party terms.
+
+4. No warranty
+
+This software is provided without warranty, to the extent permitted by law.
+The applicable GPLv3 warranty and liability disclaimers apply to the
+non-commercial permission above.
+
+This custom license adds a commercial-use restriction to GPLv3 permissions.
+Where they conflict, this restriction controls. It must not be represented as
+the unmodified GNU GPL or as an OSI-approved open-source license.
+
+--- 中文说明 ---
+
+本项目采用基于 GNU GPLv3 的定制非商业许可。标准 GPL 允许商业使用；本
+许可额外禁止未经版权持有人事先书面许可的商业使用。商业使用包括出售、
+收费访问、广告或赞助变现、纳入付费产品或服务、提供付费托管服务，以及
+营利性组织在业务运营中使用。本许可只覆盖版权持有人有权许可的项目原创
+内容；第三方组件和素材仍适用其各自许可证。此中文说明用于概括条款，若
+与上文英文条款不一致，以英文条款为准。

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+dist-h5/
+.sites-runtime/
+qa/
+# Local-only metadata, QA evidence with machine-specific paths, and deployment target.
+/.openai/
+/deploy.ps1
+/design-qa.md
+/scripts/make-compare.py
