@@ -28,6 +28,16 @@ pnpm run dev
 pnpm run build:h5
 ```
 
+### Cloudflare Pages
+
+在 Cloudflare Pages 项目设置中使用以下构建配置：
+
+- 构建命令：`pnpm run build:h5`
+- 构建输出目录：`dist/client`
+- 根目录：仓库根目录
+
+`build:h5` 会生成可直接托管的静态 H5 页面，不需要仓库中的本机 Sites 配置。`pnpm run build` 用于 Sites Worker 打包，不要将它设为 Cloudflare Pages 的构建命令。
+
 ## 数据与提醒
 
 记录保存在当前浏览器，不会自动同步到其他设备。提醒显示在页面内；关闭页面后不会发送推送通知。屏幕常亮取决于设备和浏览器支持。
