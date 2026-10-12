@@ -25,7 +25,8 @@ When implementing from a selected generated mock, treat that image as the source
 - Build app-specific UI in `src/Prototype.tsx` and `src/prototype.css`.
 - Treat `src/App.tsx`, `src/main.tsx`, `src/styles.css`, `src/mobile/`, `public/assets/iphone/`, `public/assets/android/`, `public/assets/status/`, `vite.config.ts`, `worker/index.js`, and `scripts/prepare-sites-build.mjs` as protected runtime files. Do not edit, replace, remove, or recreate them unless the user explicitly asks to change the mobile runtime itself. For an explicit runtime change, update the affected lock hashes only after verifying the new runtime behavior.
 - Run `npm run check:runtime` before preview or handoff. If it fails, restore the protected runtime instead of weakening or bypassing the check.
-- `npm run build` preserves the mobile runtime and prepares the static Cloudflare Worker output required by Sites. Before a Sites handoff, confirm `dist/client/index.html`, `dist/server/index.js`, `dist/.openai/hosting.json`, and source `.openai/hosting.json` exist, then run `npm run test:sites`. Do not replace this project with a Vinext starter.
+- The standalone H5 entry is `src/h5.tsx`. `pnpm run build` builds it into `dist/client` for the Worker Assets configuration in `wrangler.jsonc`; deploy it with `npx wrangler deploy`. `pnpm run build:h5` produces the same static H5 output for Cloudflare Pages.
+- `pnpm run build:sites` prepares the separate Sites Worker output and requires the local `.openai/hosting.json`, which is not committed to the public repository. Before a Sites handoff, confirm `dist/client/index.html`, `dist/server/index.js`, `dist/.openai/hosting.json`, and source `.openai/hosting.json` exist, then run `npm run test:sites`. Do not replace this project with a Vinext starter.
 
 ## Runtime Contract
 

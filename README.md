@@ -28,6 +28,14 @@ pnpm run dev
 pnpm run build:h5
 ```
 
+### Cloudflare Workers
+
+仓库根目录的 `wrangler.jsonc` 将 `worker/index.js` 与 `dist/client` 静态资源连接起来。Cloudflare Workers Builds 使用：
+
+- 构建命令：`pnpm run build`
+- 部署命令：`npx wrangler deploy`
+- 根目录：`/`
+
 ### Cloudflare Pages
 
 在 Cloudflare Pages 项目设置中使用以下构建配置：
@@ -36,7 +44,7 @@ pnpm run build:h5
 - 构建输出目录：`dist/client`
 - 根目录：仓库根目录
 
-`build:h5` 会生成可直接托管的静态 H5 页面，不需要仓库中的本机 Sites 配置。`pnpm run build` 用于 Sites Worker 打包，不要将它设为 Cloudflare Pages 的构建命令。
+`build:h5` 会生成可直接托管的静态 H5 页面，不需要仓库中的本机 Sites 配置。`build:sites` 单独用于 Sites 打包，并需要未提交的本机 `.openai/hosting.json`。
 
 ## 数据与提醒
 
