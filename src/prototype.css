@@ -10,9 +10,12 @@
 .feedie button{cursor:pointer}
 .feedie button:focus-visible,.feedie select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .home{position:relative;display:flex;flex-direction:column;min-height:100%;padding:70px 25px 48px}
-.edge-history{position:absolute;left:0;top:14%;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:32px;height:106px;padding:0;border:0;border-radius:0 16px 16px 0;background:#e9ebed;color:var(--ink);font-size:12px;writing-mode:vertical-rl}
-.dark .edge-history{background:#243243}
-.edge-history svg{width:14px;height:14px;transform:rotate(90deg)}
+.home-actions{position:absolute;left:0;top:70px;z-index:3;display:flex;flex-direction:column;gap:8px}
+.home-action{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:32px;min-height:70px;padding:8px 0;border:0;border-radius:0 16px 16px 0;background:#e9ebed;color:var(--ink);font-size:12px}
+.home-action span{writing-mode:vertical-rl}
+.dark .home-action{background:#243243}
+.home-action svg{width:14px;height:14px}
+.edge-history svg{transform:rotate(90deg)}
 .home-left{min-width:0}
 .home-header{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;min-height:56px}
 .brand{font-family:'DM Sans',sans-serif;font-size:22px;line-height:1;font-weight:600;letter-spacing:-.055em;white-space:nowrap}
@@ -120,7 +123,7 @@
 
 @container feedie (min-width:650px) and (min-aspect-ratio:1/1){
  .home{display:grid;grid-template-columns:40% minmax(0,60%);min-height:100%;padding:clamp(24px,3.2cqh,38px) 36px clamp(20px,3cqh,34px) 45px}
- .edge-history{top:18%;width:27px;height:100px}
+ .home-actions{top:clamp(24px,3.2cqh,38px)}
  .home-left{display:flex;flex-direction:column;justify-content:space-between;padding-right:24px;border-right:1px solid var(--line)}
  .home-header{min-height:0}.brand{font-size:clamp(24px,3cqw,40px)}.brand small{font-size:clamp(11px,1.4cqw,20px)}.today{display:block;position:absolute;right:36px;top:clamp(18px,2.8cqh,26px);font-size:clamp(13px,1.6cqw,22px)}.today strong{font-size:clamp(15px,1.8cqw,24px)}
  .clock{justify-content:flex-start;height:auto;flex:1}.clock time{font-size:clamp(100px,16cqw,200px)}
@@ -166,8 +169,8 @@
 .home,.inner{animation:feedie-enter .28s cubic-bezier(.2,.8,.2,1) both}
 .sleep{animation:feedie-sleep .38s ease-out both}
 .toast{animation:feedie-toast .22s ease-out both}
-.f-stepper button,.edge-history,.segmented button,.record-row{transition:transform .18s ease,background-color .18s ease,opacity .18s ease}
-.f-stepper button:active,.edge-history:active,.segmented button:active{transform:scale(.93)}
+.f-stepper button,.home-action,.segmented button,.record-row{transition:transform .18s ease,background-color .18s ease,opacity .18s ease}
+.f-stepper button:active,.home-action:active,.segmented button:active{transform:scale(.93)}
 .record-row:active{opacity:.55}
 @keyframes feedie-enter{from{opacity:.45;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes feedie-sleep{from{opacity:0}to{opacity:1}}

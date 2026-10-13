@@ -5,6 +5,7 @@ body{min-height:100vh;min-height:100dvh;overflow:hidden;background:#0d1520}
 .fullscreen-action span{font-size:18px;line-height:1}
 .fullscreen-action:focus-visible{outline:2px solid #4e97ff;outline-offset:2px}
 @supports(padding:env(safe-area-inset-top)){
+  #root .home-actions{top:max(20px,env(safe-area-inset-top))}
   #root .home{padding-top:max(20px,env(safe-area-inset-top));padding-bottom:max(18px,env(safe-area-inset-bottom))}
   #root .inner{padding-top:max(20px,env(safe-area-inset-top));padding-bottom:max(18px,env(safe-area-inset-bottom))}
 }

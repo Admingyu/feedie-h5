@@ -2,6 +2,8 @@
 
 ## Feedie design decisions
 
+- Group Settings and Records as adjacent operation controls at the upper-left edge of the home screen, with Settings above Records. Settings is a home-level destination and returns to Home; do not nest it inside History.
+
 - The selected visual direction is the third Product Design concept, Quiet Gauge: pale stone, dark condensed numerals, cobalt progress and recording control, and restrained amber reminder cues.
 - The H5 must work in portrait and landscape. Landscape keeps current time and last feed on the left, with elapsed time, reminder progress, amount adjustment, and the recording slider on the right. The main action must remain visible without scrolling at a 844 × 390 mobile viewport.
 - The feeding interval starts at three hours but is user editable. A completed feeding is recorded with a rightward slider, the chosen amount, and the current time. History is reachable from the left edge or its visible control.
