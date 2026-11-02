@@ -9,6 +9,7 @@
 - The feeding interval starts at three hours but is user editable. A completed feeding is recorded with a rightward slider, the chosen amount, and the current time. History is reachable from the left edge or its visible control.
 - Keep amount selection separate from recording. Place the record slider beside the current amount readout and above the segmented amount selector so the main action stays easy to reach.
 - Use a two-column layout and container-scaled type on square and landscape tablet screens; increase the top labels and standby text beyond phone-scale sizes, and keep the recording controls higher on large screens.
+- On the sleep screen, make time since the last feeding the primary information with larger, brighter type. Keep the current clock smaller and muted; landscape places the clock on the left and the feeding interval on the right.
 - Open the standalone H5 edge-to-edge with the dark theme by default; retain saved theme choices and keep protected phone preview chrome intact.
 - Keep the protected phone preview runtime intact. The app also has a standalone responsive H5 entry at `h5.html` and an independent production build using `h5.vite.config.ts`.
 
