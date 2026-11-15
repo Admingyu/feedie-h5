@@ -53,3 +53,17 @@ pnpm run build:h5
 ## 许可
 
 本项目采用 [定制 GPLv3 衍生非商业许可](LICENSE)。该许可禁止未经书面许可的商业使用；它不是标准 GPL。第三方组件和素材仍适用其各自的许可证。
+
+## 账号与数据同步
+
+在设置中选择「数据同步」，注册或登录后会合并本机和云端的喂养记录与设置。同步由用户手动触发，修改和删除的记录也会同步。字段以设备记录的修改时间为准，请确保设备时间准确。首次同步保留已有本机记录；此后本机同步数据绑定到首次使用的账号。
+
+当前版本使用邮箱和密码登录，尚未提供邮箱验证或密码找回。请妥善保管密码，并在更换设备前完成同步或导出备份。
+
+### 配置 D1
+
+1. 在 Cloudflare 账户创建数据库：`npx wrangler d1 create feedie`。
+2. 将命令输出的数据库 ID 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id`。
+3. 执行 `npx wrangler d1 migrations apply feedie --remote` 初始化线上数据库，再构建并部署 Worker。
+
+本地调试可先执行 `npx wrangler d1 migrations apply feedie --local`，然后运行 `pnpm run build` 和 `npx wrangler dev --local`。本地数据库和线上数据库互不影响。Cloudflare Pages 的纯静态构建无法提供登录和同步 API，需要使用 Worker 部署。

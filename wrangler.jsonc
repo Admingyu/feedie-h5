@@ -1,9 +1,19 @@
 {
   "name": "feedee",
-  "main": "worker/index.js",
+  "main": "worker/api.js",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./dist/client",
-    "binding": "ASSETS"
-  }
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "feedie",
+      "database_id": "3ac91169-e096-4f86-94d3-6bd069dc81b3"
+    }
+  ]
 }
