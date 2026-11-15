@@ -5,10 +5,13 @@ const encoder = new TextEncoder();
 const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
 const digest = async value => hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
 const random = bytes => hex(crypto.getRandomValues(new Uint8Array(bytes)));
-// PBKDF2 逐用户加盐，密码绝不以明文保存。
-async function passwordHash(password, salt) {
+// 新账号的哈希参数记录在数据库中；未标记的旧格式使用 310000 次迭代。
+const passwordIterations = 100000;
+const passwordHashPrefix = `pbkdf2-sha256$${passwordIterations}$`;
+// PBKDF2 逐用户加盐；Cloudflare Workers 生产环境单次调用最多支持 100000 次迭代。
+async function passwordHash(password, salt, iterations = passwordIterations) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  return hex(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 310000 }, key, 256));
+  return hex(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations }, key, 256));
 }
 // 比较固定长度摘要，避免直接使用普通字符串比较。
 function equalHash(a, b) {
@@ -49,13 +52,17 @@ async function api(request, env) {
     let user = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
     if (path === '/api/register') {
       if (user) return json({ error: '该邮箱已注册' }, 409);
-      const id = crypto.randomUUID(), salt = random(16), hash = await passwordHash(password, salt);
+      const id = crypto.randomUUID(), salt = random(16), hash = passwordHashPrefix + await passwordHash(password, salt);
       try { await db.batch([db.prepare('INSERT INTO users (id,email,salt,password_hash,created_at) VALUES (?,?,?,?,?)').bind(id,email,salt,hash,Date.now()), db.prepare('INSERT INTO snapshots (user_id) VALUES (?)').bind(id)]); }
       catch (e) { if (String(e).includes('UNIQUE constraint failed')) return json({ error: '该邮箱已注册' }, 409); throw e; }
       user = { id, email };
     } else {
-      const calculated = await passwordHash(password, user?.salt || '00000000000000000000000000000000');
-      if (!user || !equalHash(calculated, user.password_hash)) return json({ error: '邮箱或密码不正确' }, 401);
+      const stored = user?.password_hash;
+      const legacy = typeof stored === 'string' && /^[a-f0-9]{64}$/.test(stored);
+      if (stored && !legacy && !stored.startsWith(passwordHashPrefix)) throw new Error('Unsupported password hash format');
+      const calculated = await passwordHash(password, user?.salt || '00000000000000000000000000000000', legacy ? 310000 : passwordIterations);
+      const expected = legacy ? stored : stored?.slice(passwordHashPrefix.length);
+      if (!user || !expected || !equalHash(calculated, expected)) return json({ error: '邮箱或密码不正确' }, 401);
     }
     const token = random(32), age = 30 * 86400;
     await db.prepare('INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,?)').bind(await digest(token), user.id, Date.now() + age * 1000).run();
