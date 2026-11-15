@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type TouchEvent } from "react";
 import { ArrowRightIcon, ChevronLeftIcon, GearIcon, HamburgerMenuIcon, PlusIcon } from "@radix-ui/react-icons";
 import { BottomSheet, KeyboardInput, MobileScroll, useKeyboard } from "./mobile";
-import { request, track, syncData, storeSnapshot, mergeSnapshots } from "./sync";
+import { ApiError, request, track, trackChanges, syncData, storeSnapshot, mergeSnapshots, type Snapshot } from "./sync";
 import { parseRecords } from "./import-records";
 import "./prototype.css";
 
@@ -121,8 +121,31 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   const [syncMessage,setSyncMessage]=useState("");
   const [importBusy,setImportBusy]=useState(false);
   const [importMessage,setImportMessage]=useState("");
+  const scheduleSyncRef=useRef<()=>void>(()=>{});
+  const syncNowRef=useRef<()=>void>(()=>{});
   const dataRef=useRef({entries,prefs});
+  const snapshotRef=useRef<Snapshot|null>(null);
   dataRef.current={entries,prefs};
+  // 应用合并结果前同步更新引用，防止异步请求读到旧页面状态。
+  function applySnapshot(snapshot:Snapshot) {
+    const nextEntries=Object.values(snapshot.records).map(item=>item.value).filter((item):item is Entry=>item!==null) as Entry[];
+    const nextPrefs={...defaults,...Object.fromEntries(Object.entries(snapshot.settings).map(([key,item])=>[key,item.value]))};
+    const previous=dataRef.current;
+    dataRef.current={entries:nextEntries,prefs:nextPrefs};
+    if(JSON.stringify(previous.entries)!==JSON.stringify(nextEntries))setEntries(nextEntries);
+    if(JSON.stringify(previous.prefs)!==JSON.stringify(nextPrefs))setPrefs(nextPrefs);
+  }
+  // 合并此页面的修改和其他标签页共享的快照，再用于网络同步。
+  function captureSnapshot() {
+    const {entries:currentEntries,prefs:currentPrefs}=dataRef.current;
+    const local=snapshotRef.current?trackChanges(currentEntries,currentPrefs,snapshotRef.current):track(currentEntries,currentPrefs);
+    const saved=localStorage.getItem("feedie.sync");
+    const merged=saved?mergeSnapshots(local,JSON.parse(saved) as Snapshot):local;
+    snapshotRef.current=merged;
+    storeSnapshot(merged);
+    applySnapshot(merged);
+    return merged;
+  }
   const [now,setNow]=useState(()=>new Date());
   const [page,setPage]=useState<"home"|"history"|"settings">("home");
   const [ml,setMl]=useState(prefs.ml);
@@ -138,8 +161,80 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   useEffect(()=>{const id=window.setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(id);},[]);
   useEffect(()=>{if(!demo)localStorage.setItem("feedie.entries",JSON.stringify(entries));},[entries]);
   useEffect(()=>{if(!demo)localStorage.setItem("feedie.prefs",JSON.stringify(prefs));},[prefs]);
-  useEffect(()=>{if(!demo)track(entries,prefs);},[entries,prefs]);
-  useEffect(()=>{if(!demo)void request<{id:string;email:string}>("/api/session").then(setUser).catch(()=>{});},[]);
+  // 本机先落盘，随后安排同步；离线修改在恢复网络时继续上传。
+  useEffect(()=>{if(!demo){captureSnapshot();scheduleSyncRef.current();}},[entries,prefs]);
+  // 同源标签页共享 localStorage；用字段版本合并，不能把另一个标签页的新记录当成删除。
+  useEffect(()=>{
+    if(demo)return;
+    const onStorage=(event:StorageEvent)=>{if(event.key==="feedie.sync"&&event.newValue){captureSnapshot();scheduleSyncRef.current();}};
+    window.addEventListener("storage",onStorage);
+    return()=>window.removeEventListener("storage",onStorage);
+  },[]);
+  // 恢复会话遇到网络错误时重试；未登录是正常状态，不反复请求。
+  useEffect(()=>{
+    if(demo)return;
+    let cancelled=false, restoring=false, retry:number|undefined;
+    const restore=async()=>{
+      if(cancelled||restoring)return;
+      if(retry!==undefined){clearTimeout(retry);retry=undefined;}
+      restoring=true;
+      try {const account=await request<{id:string;email:string}>("/api/session");if(!cancelled)setUser(current=>current??account);}
+      catch(error){if(cancelled||error instanceof ApiError&&error.status===401)return;setSyncMessage("连接失败，将自动重试");retry=window.setTimeout(restore,30000);}
+      finally {restoring=false;}
+    };
+    void restore();
+    const reconnect=()=>{if(retry!==undefined)void restore();};
+    window.addEventListener("online",reconnect);
+    return()=>{cancelled=true;if(retry!==undefined)clearTimeout(retry);window.removeEventListener("online",reconnect);};
+  },[]);
+  // 同一设备串行同步，并在请求期间有新修改时再执行一次。
+  useEffect(()=>{
+    if(!user||demo)return;
+    const account=user;
+    let cancelled=false,inFlight=false,pending=false,timer:number|undefined;
+    const run=async()=>{
+      if(cancelled)return;
+      if(inFlight){pending=true;return;}
+      if(!navigator.onLine){setSyncMessage("当前离线，联网后自动同步");return;}
+      inFlight=true;pending=false;setSyncBusy(true);setSyncMessage("正在同步…");
+      let failed=false;
+      try {
+        const started=captureSnapshot();
+        const cloud=await syncData(account,started);
+        if(cancelled)return;
+        const latest=captureSnapshot();
+        if(JSON.stringify(started)!==JSON.stringify(latest))pending=true;
+        const merged=mergeSnapshots(latest,cloud);
+        snapshotRef.current=merged;
+        storeSnapshot(merged);
+        applySnapshot(merged);
+        setSyncMessage(pending?"有新修改，正在同步…":"已同步");
+      } catch(error) {
+        if(cancelled)return;
+        failed=true;
+        if(error instanceof ApiError&&error.status===401){setUser(null);setSyncMessage("登录已过期，请重新登录");}
+        else setSyncMessage(`${error instanceof Error?error.message:"同步失败"}，稍后自动重试`);
+      } finally {
+        inFlight=false;
+        if(!cancelled){setSyncBusy(false);if(pending&&!failed)schedule();}
+      }
+    };
+    const schedule=()=>{
+      if(cancelled)return;
+      if(inFlight){pending=true;return;}
+      if(timer!==undefined)clearTimeout(timer);
+      setSyncMessage("等待同步…");
+      timer=window.setTimeout(()=>{timer=undefined;void run();},600);
+    };
+    const resume=()=>{if(document.visibilityState==="visible")void run();};
+    scheduleSyncRef.current=schedule;
+    syncNowRef.current=()=>{void run();};
+    window.addEventListener("online",resume);
+    document.addEventListener("visibilitychange",resume);
+    const poll=window.setInterval(resume,30000);
+    void run();
+    return()=>{cancelled=true;scheduleSyncRef.current=()=>{};syncNowRef.current=()=>{};if(timer!==undefined)clearTimeout(timer);clearInterval(poll);window.removeEventListener("online",resume);document.removeEventListener("visibilitychange",resume);};
+  },[user]);
   useEffect(()=>{setMl(prefs.ml);},[prefs.ml]);
   useEffect(()=>{const reset=()=>{if(sleeping)return;if(idleRef.current)clearTimeout(idleRef.current);if(prefs.sleep&&page==="home"&&!draft)idleRef.current=window.setTimeout(()=>setSleeping(true),prefs.sleep*1000);};reset();window.addEventListener("pointerdown",reset);window.addEventListener("keydown",reset);return()=>{window.removeEventListener("pointerdown",reset);window.removeEventListener("keydown",reset);if(idleRef.current)clearTimeout(idleRef.current);};},[prefs.sleep,page,draft,sleeping]);
   useEffect(()=>{
@@ -178,23 +273,6 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   const openDraft=(entry?:Entry)=>{const date=entry?new Date(entry.at):now;setDraft({id:entry?.id,day:dayKey(date),hour:date.getHours(),minute:date.getMinutes(),ml:entry?.ml??prefs.ml});setConfirmDelete(false);};
   const saveDraft=()=>{if(!draft)return;const at=new Date(`${draft.day}T${String(draft.hour).padStart(2,"0")}:${String(draft.minute).padStart(2,"0")}:00`);if(Number.isNaN(+at)||+at>+now+60000){setToast("时间不能晚于现在");return;}const item={id:draft.id??`${Date.now()}-manual`,at:at.toISOString(),ml:draft.ml};setEntries(e=>draft.id?e.map(x=>x.id===draft.id?item:x):[...e,item]);setDraft(null);setToast("记录已保存");window.setTimeout(()=>setToast(""),2200);};
   const deleteDraft=()=>{if(!draft?.id)return;setEntries(e=>e.filter(x=>x.id!==draft.id));setDraft(null);setConfirmDelete(false);setToast("记录已删除");window.setTimeout(()=>setToast(""),2200);};
-  // 请求期间用户仍可编辑，返回后再次合并本机最新修改。
-  const sync=async(account:{id:string;email:string})=>{
-    if(syncBusy)return;
-    setSyncBusy(true);setSyncMessage("");
-    try {
-      const started=track(dataRef.current.entries,dataRef.current.prefs);
-      const cloud=await syncData(account,started);
-      const latest=track(dataRef.current.entries,dataRef.current.prefs);
-      const changedDuringSync=JSON.stringify(started)!==JSON.stringify(latest);
-      const merged=mergeSnapshots(latest,cloud);
-      storeSnapshot(merged);
-      setEntries(Object.values(merged.records).map(item=>item.value).filter((item):item is Entry=>item!==null) as Entry[]);
-      setPrefs({...defaults,...Object.fromEntries(Object.entries(merged.settings).map(([key,item])=>[key,item.value]))});
-      setSyncMessage(changedDuringSync?"同步完成，同步期间的新修改需要再次同步":"同步完成");
-    } catch(e) { setSyncMessage(e instanceof Error?e.message:"同步失败，请检查网络"); }
-    finally {setSyncBusy(false);}
-  };
   // 校验整个备份后按 ID 合并；当前设备已有的记录始终保留。
   const importEntries=async(event:React.ChangeEvent<HTMLInputElement>)=>{
     const input=event.currentTarget;
@@ -209,11 +287,12 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
       const additions:Entry[]=[];
       for(const entry of imported){if(!ids.has(entry.id)){ids.add(entry.id);additions.push(entry);}}
       // 备份没有修改时间，使用初始版本；同步时已有云端版本优先，避免旧备份覆盖新记录。
-      const snapshot=track(existing,dataRef.current.prefs);
+      const snapshot=captureSnapshot();
       for(const entry of additions)snapshot.records[entry.id]={version:"0000000000000-initial",value:entry};
+      snapshotRef.current=snapshot;
       storeSnapshot(snapshot);
       setEntries([...existing,...additions]);
-      setImportMessage(`已导入 ${additions.length} 条，跳过 ${imported.length-additions.length} 条已有记录。请点击数据同步上传。`);
+      setImportMessage(`已导入 ${additions.length} 条，跳过 ${imported.length-additions.length} 条已有记录。${user?"将自动同步。":"登录后可自动同步。"}`);
     } catch(error) {setImportMessage(error instanceof Error?error.message:"读取文件失败");}
     finally {setImportBusy(false);}
   };
@@ -229,10 +308,10 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   };
   if(draft&&!dateOptions.includes(draft.day))dateOptions.push(draft.day);
   return <div className={`feedie ${dark?"dark":"light"}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} data-testid="feedie-app">
-    {page==="home"&&<main className="home" aria-label="喂养状态"><nav className="home-actions" aria-label="常用操作"><button type="button" className="home-action edge-settings" onClick={()=>setPage("settings")} aria-label="打开设置"><GearIcon/><span>设置</span></button><button type="button" className="home-action edge-history" onClick={()=>setPage("history")} aria-label="查看喂养记录"><HamburgerMenuIcon/><span>记录</span></button></nav><section className="home-left"><header className="home-header"><div className="brand">Quiet Gauge<small>记住每一次温柔的守护</small></div><div className="today"><span>{dayKey(now)} · {["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][now.getDay()]}</span><strong>今日 {todayTotal} mL</strong></div></header><div className="clock"><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="last-landscape"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></section><section className="home-right"><div className="interval"><span className="caption">已间隔</span><strong className="elapsed">{last?spanText(elapsed):"尚未开始"}</strong><span className={`due ${remaining!==null&&remaining<=prefs.advance?"alert":""}`} aria-live="polite">{dueCopy}</span><div className="timeline-labels"><span>上次喂养<strong>{last?hhmm(last):"—"}</strong></span><span>下次喂养<strong>{due?hhmm(due):"—"}</strong></span></div><div className="progress" role="progressbar" aria-label="喂养提醒进度" aria-valuenow={Math.round(ratio*100)} aria-valuemin={0} aria-valuemax={100}><span style={{width:`${ratio*100}%`}}/><i style={{left:`${ratio*100}%`}}/></div><div className="scale"><span>0</span><span>{spanText(prefs.interval)}</span></div><div className="last-portrait"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></div><div className="entry"><div className="entry-amount"><AmountSlider value={currentFeedMl} max={sliderMax} change={setMl} complete={saveNow}/></div></div></section></main>}
+    {page==="home"&&<main className="home" aria-label="喂养状态"><nav className="home-actions" aria-label="常用操作"><button type="button" className="home-action edge-settings" onClick={()=>setPage("settings")} aria-label="打开设置"><GearIcon/><span>设置</span></button><button type="button" className="home-action edge-history" onClick={()=>setPage("history")} aria-label="查看喂养记录"><HamburgerMenuIcon/><span>记录</span></button></nav><section className="home-left"><header className="home-header"><div className="brand">Quiet Gauge<small>记住每一次温柔的守护</small></div><div className="today"><span>{dayKey(now)} · {["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][now.getDay()]}</span><strong>今日 {todayTotal} mL</strong>{(user||syncMessage)&&<small className="sync-indicator">{syncBusy?"同步中":syncMessage==="已同步"?"已同步":syncMessage.includes("离线")?"离线 · 待同步":syncMessage.includes("等待")?"等待同步":syncMessage?"同步待处理":"准备同步"}</small>}</div></header><div className="clock"><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="last-landscape"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></section><section className="home-right"><div className="interval"><span className="caption">已间隔</span><strong className="elapsed">{last?spanText(elapsed):"尚未开始"}</strong><span className={`due ${remaining!==null&&remaining<=prefs.advance?"alert":""}`} aria-live="polite">{dueCopy}</span><div className="timeline-labels"><span>上次喂养<strong>{last?hhmm(last):"—"}</strong></span><span>下次喂养<strong>{due?hhmm(due):"—"}</strong></span></div><div className="progress" role="progressbar" aria-label="喂养提醒进度" aria-valuenow={Math.round(ratio*100)} aria-valuemin={0} aria-valuemax={100}><span style={{width:`${ratio*100}%`}}/><i style={{left:`${ratio*100}%`}}/></div><div className="scale"><span>0</span><span>{spanText(prefs.interval)}</span></div><div className="last-portrait"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></div><div className="entry"><div className="entry-amount"><AmountSlider value={currentFeedMl} max={sliderMax} change={setMl} complete={saveNow}/></div></div></section></main>}
     {page==="history"&&<main className="inner history" aria-label="喂养记录"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>喂养记录</h1><span/></header><div className="history-body"><div className="history-top"><strong>{sorted.length}</strong><span>条记录</span><button type="button" onClick={()=>openDraft()}><PlusIcon/> 补录</button></div>{sorted.length?<div className="record-list">{sorted.map((item,index)=>{const date=new Date(item.at),key=dayKey(date),prev=sorted[index-1];return <div key={item.id}>{(!prev||dayKey(new Date(prev.at))!==key)&&<h2><span>{key}</span><strong>合计 {dailyTotals.get(key)??0} mL</strong></h2>}<button type="button" className="record-row" onClick={()=>openDraft(item)}><time>{hhmm(date)}</time><span>{item.ml} mL</span><b>›</b></button></div>;})}</div>:<div className="empty"><strong>还没有喂养记录</strong><span>可在主屏滑动记录，或点「补录」。</span></div>}</div></main>}
-    {page==="settings"&&<main className="inner settings" aria-label="设置"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>设置</h1><span/></header><div className="settings-body"><section><h2>喂养</h2><label className="setting-row"><div><strong>宝宝出生日期</strong><small>用于计算主屏月龄参考上限</small></div><input className="date-setting" type="date" aria-label="宝宝出生日期" max={todayKey} value={isDateKey(prefs.birthDate)&&prefs.birthDate<=todayKey?prefs.birthDate:""} onChange={event=>changeBirthDate(event.currentTarget.value)}/></label><div className="setting-row"><div><strong>默认奶量</strong><small>记录前可临时调整</small></div><Stepper value={prefs.ml} change={v=>changePref("ml",v)} min={10} label="默认奶量"/></div><div className="setting-row"><div><strong>提醒间隔</strong><small>从上次喂养时间开始</small></div><Stepper value={prefs.interval} change={v=>changePref("interval",v)} min={30} max={360} step={15} unit="分" label="提醒间隔"/></div><div className="setting-row"><div><strong>提前提示</strong></div><select aria-label="提前提示" value={prefs.advance} onChange={e=>changePref("advance",Number(e.target.value))}><option value={0}>不提前</option><option value={10}>10 分钟</option><option value={15}>15 分钟</option><option value={30}>30 分钟</option></select></div></section><section><h2>显示</h2><div className="theme-setting"><strong>主题模式</strong><small>自动按本地时间 07:00–19:00 切换</small><div className="segmented" role="group" aria-label="主题模式">{(["auto","light","dark"] as const).map(value=><button key={value} type="button" aria-pressed={prefs.theme===value} onClick={()=>changePref("theme",value)}>{value==="auto"?"自动":value==="light"?"亮色":"暗色"}</button>)}</div></div><div className="setting-row"><div><strong>睡眠模式</strong><small>无操作后仅显示时间</small></div><select aria-label="屏幕超时" value={prefs.sleep} onChange={e=>changePref("sleep",Number(e.target.value))}><option value={0}>关闭</option><option value={30}>30 秒</option><option value={60}>1 分钟</option><option value={120}>2 分钟</option><option value={300}>5 分钟</option></select></div><div className="setting-row"><div><strong>保持屏幕常亮</strong><small>页面打开时尝试阻止系统锁屏</small></div><button type="button" className="switch" role="switch" aria-checked={prefs.keepAwake} onClick={()=>changePref("keepAwake",!prefs.keepAwake)}><span/></button></div></section><section><h2>数据</h2><button className="export" type="button" disabled={syncBusy||importBusy||demo} onClick={()=>user?void sync(user):setAuthOpen(true)}>{syncBusy?"正在同步…":"数据同步"}<span>›</span></button>{user&&<><p>已登录：{user.email}</p><button className="export" type="button" onClick={async()=>{try{await request("/api/logout","POST");setUser(null);setSyncMessage("已退出登录");}catch(e){setSyncMessage(e instanceof Error?e.message:"退出失败");}}}>退出登录 <span>›</span></button></>}{syncMessage&&<p role="status">{syncMessage}</p>}<label className={`export import-action${syncBusy||importBusy||demo?" disabled":""}`}> {importBusy?"正在导入…":"导入记录 JSON"}<span aria-hidden="true">›</span><input type="file" accept=".json,application/json" disabled={syncBusy||importBusy||demo} aria-label="导入记录 JSON" onChange={importEntries}/></label>{importMessage&&<p role="status">{importMessage}</p>}<button className="export" type="button" onClick={exportEntries}>导出记录 JSON <span>›</span></button><p>记录保存在当前浏览器。点击数据同步可备份并同步到其他设备。</p></section></div></main>}
-    {authOpen&&(preview?<PreviewAuthDialog close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);void sync(account);}}/>:<AuthDialog preview={false} close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);void sync(account);}}/>)}
+    {page==="settings"&&<main className="inner settings" aria-label="设置"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>设置</h1><span/></header><div className="settings-body"><section><h2>喂养</h2><label className="setting-row"><div><strong>宝宝出生日期</strong><small>用于计算主屏月龄参考上限</small></div><input className="date-setting" type="date" aria-label="宝宝出生日期" max={todayKey} value={isDateKey(prefs.birthDate)&&prefs.birthDate<=todayKey?prefs.birthDate:""} onChange={event=>changeBirthDate(event.currentTarget.value)}/></label><div className="setting-row"><div><strong>默认奶量</strong><small>记录前可临时调整</small></div><Stepper value={prefs.ml} change={v=>changePref("ml",v)} min={10} label="默认奶量"/></div><div className="setting-row"><div><strong>提醒间隔</strong><small>从上次喂养时间开始</small></div><Stepper value={prefs.interval} change={v=>changePref("interval",v)} min={30} max={360} step={15} unit="分" label="提醒间隔"/></div><div className="setting-row"><div><strong>提前提示</strong></div><select aria-label="提前提示" value={prefs.advance} onChange={e=>changePref("advance",Number(e.target.value))}><option value={0}>不提前</option><option value={10}>10 分钟</option><option value={15}>15 分钟</option><option value={30}>30 分钟</option></select></div></section><section><h2>显示</h2><div className="theme-setting"><strong>主题模式</strong><small>自动按本地时间 07:00–19:00 切换</small><div className="segmented" role="group" aria-label="主题模式">{(["auto","light","dark"] as const).map(value=><button key={value} type="button" aria-pressed={prefs.theme===value} onClick={()=>changePref("theme",value)}>{value==="auto"?"自动":value==="light"?"亮色":"暗色"}</button>)}</div></div><div className="setting-row"><div><strong>睡眠模式</strong><small>无操作后仅显示时间</small></div><select aria-label="屏幕超时" value={prefs.sleep} onChange={e=>changePref("sleep",Number(e.target.value))}><option value={0}>关闭</option><option value={30}>30 秒</option><option value={60}>1 分钟</option><option value={120}>2 分钟</option><option value={300}>5 分钟</option></select></div><div className="setting-row"><div><strong>保持屏幕常亮</strong><small>页面打开时尝试阻止系统锁屏</small></div><button type="button" className="switch" role="switch" aria-checked={prefs.keepAwake} onClick={()=>changePref("keepAwake",!prefs.keepAwake)}><span/></button></div></section><section><h2>数据</h2><button className="export" type="button" disabled={syncBusy||importBusy||demo} onClick={()=>user?syncNowRef.current():setAuthOpen(true)}>{syncBusy?"正在同步…":user?"立即同步":"登录以同步"}<span>›</span></button>{user&&<><p>已登录：{user.email}</p><button className="export" type="button" onClick={async()=>{try{await request("/api/logout","POST");setUser(null);setSyncMessage("已退出登录");}catch(e){setSyncMessage(e instanceof Error?e.message:"退出失败");}}}>退出登录 <span>›</span></button></>}{syncMessage&&<p role="status">{syncMessage}</p>}<label className={`export import-action${syncBusy||importBusy||demo?" disabled":""}`}> {importBusy?"正在导入…":"导入记录 JSON"}<span aria-hidden="true">›</span><input type="file" accept=".json,application/json" disabled={syncBusy||importBusy||demo} aria-label="导入记录 JSON" onChange={importEntries}/></label>{importMessage&&<p role="status">{importMessage}</p>}<button className="export" type="button" onClick={exportEntries}>导出记录 JSON <span>›</span></button><p>记录保存在当前浏览器；登录后会自动同步到其他设备。</p></section></div></main>}
+    {authOpen&&(preview?<PreviewAuthDialog close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);}}/>:<AuthDialog preview={false} close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);}}/>)}
     {sleeping&&page==="home"&&<button type="button" className="sleep" aria-label="轻触唤醒主屏" onClick={()=>setSleeping(false)}><div className="sleep-clock"><span>当前时间</span><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="sleep-interval"><span>距上次喂养</span><strong>{last?spanText(elapsed):"尚无记录"}</strong></div><small>轻触唤醒</small></button>}
     {draft&&<div className="overlay" onClick={()=>setDraft(null)}><section className="editor" role="dialog" aria-modal="true" aria-label={draft.id?"修改喂养记录":"补录喂养"} onClick={e=>e.stopPropagation()}><header><h2>{draft.id?"修改记录":"补录喂养"}</h2><button type="button" aria-label="关闭" onClick={()=>setDraft(null)}>×</button></header><label className="edit-row">日期<select aria-label="日期" value={draft.day} onChange={e=>setDraft({...draft,day:e.target.value})}>{dateOptions.map(d=><option key={d} value={d}>{d}</option>)}</select></label><div className="edit-row">时间<div className="time-select"><select aria-label="小时" value={draft.hour} onChange={e=>setDraft({...draft,hour:Number(e.target.value)})}>{Array.from({length:24},(_,n)=><option key={n} value={n}>{String(n).padStart(2,"0")}</option>)}</select>:<select aria-label="分钟" value={draft.minute} onChange={e=>setDraft({...draft,minute:Number(e.target.value)})}>{Array.from({length:60},(_,n)=><option key={n} value={n}>{String(n).padStart(2,"0")}</option>)}</select></div></div><div className="edit-row">喂养奶量<Stepper value={draft.ml} change={v=>setDraft({...draft,ml:v})} label="记录奶量"/></div><button className="save" type="button" onClick={saveDraft}>保存记录</button>{draft.id&&<button className="delete" type="button" onClick={()=>setConfirmDelete(true)}>删除这条记录</button>}</section></div>}
     {confirmDelete&&<div className="confirm-overlay"><section role="alertdialog" aria-modal="true" aria-label="确认删除记录"><h2>删除这条记录？</h2><p>提醒时间会按剩余的最新记录重新计算。</p><div><button type="button" onClick={()=>setConfirmDelete(false)}>取消</button><button type="button" onClick={deleteDraft}>删除</button></div></section></div>}
