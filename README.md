@@ -8,7 +8,7 @@ Feedie 是一款移动端婴儿喂养记录 H5 原型，支持竖屏和横屏。
 - 调整本次奶量后，通过独立滑动条记录喂养；记录保存后可短暂撤销。
 - 查看喂养历史，支持补录、修改时间和奶量、删除。
 - 配置默认奶量、提醒间隔、提前提示、主题、睡眠模式与屏幕常亮。
-- 在当前浏览器保存记录，并支持 JSON 导出。
+- 在当前浏览器保存记录，并支持 JSON 导入和导出。
 - 横屏主屏采用双栏布局。
 
 ## 开发与构建
@@ -30,10 +30,10 @@ pnpm run build:h5
 
 ### Cloudflare Workers
 
-仓库根目录的 `wrangler.jsonc` 将 `worker/index.js` 与 `dist/client` 静态资源连接起来。Cloudflare Workers Builds 使用：
+仓库根目录的 `wrangler.jsonc` 将 `worker/api.js` 与 `dist/client` 静态资源及 D1 数据库连接起来。Cloudflare Workers Builds 使用：
 
 - 构建命令：`pnpm run build`
-- 部署命令：`npx wrangler deploy`
+- 部署命令：`npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`
 - 根目录：`/`
 
 ### Cloudflare Pages
@@ -48,7 +48,7 @@ pnpm run build:h5
 
 ## 数据与提醒
 
-记录保存在当前浏览器，不会自动同步到其他设备。提醒显示在页面内；关闭页面后不会发送推送通知。屏幕常亮取决于设备和浏览器支持。
+记录保存在当前浏览器，可以登录后手动同步到其他设备。提醒显示在页面内；关闭页面后不会发送推送通知。屏幕常亮取决于设备和浏览器支持。
 
 ## 许可
 
@@ -56,14 +56,14 @@ pnpm run build:h5
 
 ## 账号与数据同步
 
-在设置中选择「数据同步」，注册或登录后会合并本机和云端的喂养记录与设置。同步由用户手动触发，修改和删除的记录也会同步。字段以设备记录的修改时间为准，请确保设备时间准确。首次同步保留已有本机记录；此后本机同步数据绑定到首次使用的账号。
+在设置中选择「导入记录 JSON」，可导入本应用导出的 v1 备份；只导入喂养记录，按 ID 跳过本机已有记录，不覆盖设置。同步时云端已有的同 ID 记录或删除状态优先。导入后选择「数据同步」，将记录上传到账号。选择「数据同步」并注册或登录后会合并本机和云端的喂养记录与设置。同步由用户手动触发，修改和删除的记录也会同步。字段以设备记录的修改时间为准，请确保设备时间准确。首次同步保留已有本机记录；此后本机同步数据绑定到首次使用的账号。
 
 当前版本使用邮箱和密码登录，尚未提供邮箱验证或密码找回。请妥善保管密码，并在更换设备前完成同步或导出备份。
 
-### 配置 D1
+### 配置 D1 和自动迁移
 
-1. 在 Cloudflare 账户创建数据库：`npx wrangler d1 create feedie`。
-2. 将命令输出的数据库 ID 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id`。
-3. 执行 `npx wrangler d1 migrations apply feedie --remote` 初始化线上数据库，再构建并部署 Worker。
+`wrangler.jsonc` 绑定已有的 `feddie` 数据库。Cloudflare Workers Builds 的部署命令会先执行 `wrangler d1 migrations apply DB --remote`，仅应用尚未执行的迁移；迁移失败时不会部署新 Worker。构建 API 令牌需要拥有 D1 编辑权限。
 
-本地调试可先执行 `npx wrangler d1 migrations apply feedie --local`，然后运行 `pnpm run build` 和 `npx wrangler dev --local`。本地数据库和线上数据库互不影响。Cloudflare Pages 的纯静态构建无法提供登录和同步 API，需要使用 Worker 部署。
+本地手动部署时先运行 `pnpm run build`，再运行 `pnpm run deploy`。直接运行 `npx wrangler deploy` 不会自动执行 D1 迁移。
+
+本地调试可先执行 `npx wrangler d1 migrations apply DB --local`，然后运行 `pnpm run build` 和 `npx wrangler dev --local`。本地数据库和线上数据库互不影响。Cloudflare Pages 的纯静态构建无法提供登录和同步 API，需要使用 Worker 部署。

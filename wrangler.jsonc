@@ -12,7 +12,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "feedie",
+      "database_name": "feddie",
       "database_id": "3ac91169-e096-4f86-94d3-6bd069dc81b3"
     }
   ]
