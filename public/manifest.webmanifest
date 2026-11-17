@@ -1,0 +1,20 @@
+{
+  "id": "./",
+  "name": "Feedie 喂养计时",
+  "short_name": "Feedie",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0d1520",
+  "theme_color": "#0d1520",
+  "icons": [
+    {
+      "src": "./feedie-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
