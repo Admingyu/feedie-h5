@@ -1,4 +1,5 @@
 import assetsWorker from './index.js';
+export { CallRoom } from './calls.js';
 
 // 同源 Cookie 会话使用随机令牌；数据库中只保存令牌摘要。
 const encoder = new TextEncoder();
@@ -28,7 +29,7 @@ function sameOrigin(request) { return request.headers.get('Origin') === new URL(
 async function session(request, db) {
   const token = request.headers.get('Cookie')?.match(/(?:^|;\s*)feedie_session=([a-f0-9]{64})(?:;|$)/)?.[1];
   if (!token) return null;
-  return db.prepare('SELECT users.id, users.email FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').bind(await digest(token), Date.now()).first();
+  return db.prepare('SELECT users.id, users.email, sessions.expires_at FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').bind(await digest(token), Date.now()).first();
 }
 // 固定窗口同时限制来源 IP 和账号，减轻注册及密码猜测攻击。
 async function limit(db, key, limitCount) {
@@ -70,10 +71,27 @@ async function api(request, env) {
   }
   const user = await session(request, db);
   if (!user) return json({ error: '请先登录' }, 401);
-  if (path === '/api/session' && request.method === 'GET') return json(user);
+  if (path === '/api/session' && request.method === 'GET') return json({ id: user.id, email: user.email });
+  if (path === '/api/calls/config' || path === '/api/calls/connect') {
+    if (!env.CALL_ROOMS || !env.REALTIMEKIT_ACCOUNT_ID || !env.REALTIMEKIT_APP_ID || !env.REALTIMEKIT_API_TOKEN) return json({ error: '视频通话尚未启用，请先完成服务配置' }, 503);
+    if (request.method !== 'GET') return json({ error: '请求方法不正确' }, 405);
+    if (path === '/api/calls/config') return json({ enabled: true });
+    // WebSocket 也校验 Origin，防止第三方网页借用登录 Cookie 呼叫其他设备。
+    if (!sameOrigin(request)) return json({ error: '请求来源不正确' }, 403);
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: '需要实时连接' }, 426);
+    const headers = new Headers(request.headers);
+    const token = request.headers.get('Cookie').match(/(?:^|;\s*)feedie_session=([a-f0-9]{64})(?:;|$)/)[1];
+    headers.set('X-Feedie-Session', await digest(token));
+    headers.set('X-Feedie-Expires', String(user.expires_at));
+    return env.CALL_ROOMS.get(env.CALL_ROOMS.idFromName(user.id)).fetch(new Request(request, { headers }));
+  }
   if (path === '/api/logout' && request.method === 'POST') {
     const token = request.headers.get('Cookie')?.match(/(?:^|;\s*)feedie_session=([a-f0-9]{64})(?:;|$)/)?.[1];
-    if (token) await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await digest(token)).run();
+    if (token) {
+      const hash = await digest(token);
+      await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash).run();
+      if (env.CALL_ROOMS) await env.CALL_ROOMS.get(env.CALL_ROOMS.idFromName(user.id)).fetch(new Request('https://calls.internal/logout', { method: 'POST', headers: { 'X-Feedie-Session': hash } }));
+    }
     return json({ ok: true }, 200, { 'Set-Cookie': cookie('', 0) });
   }
   if (path === '/api/sync' && request.method === 'GET') {

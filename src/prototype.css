@@ -183,3 +183,61 @@
 .password-group{display:grid;gap:6px}.password-field{position:relative}.auth-content .password-field input{padding-right:64px}.password-field button{position:absolute;top:1px;right:1px;bottom:1px;min-width:56px;border:0;border-radius:7px;background:transparent;color:#0765f6;font:inherit;font-size:13px}.password-field button:focus-visible{outline:2px solid #0765f6;outline-offset:-3px}
 .import-action{position:relative;cursor:pointer}.import-action.disabled{opacity:.5;cursor:default}.import-action input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.import-action:focus-within{outline:2px solid var(--blue);outline-offset:2px}
 .today .sync-indicator{display:block;margin-top:4px;color:var(--muted);font-size:10px;font-weight:500}
+
+/* 视频通话沿用应用主题；来电层独立于主屏记录操作，手机横竖屏均保留挂断入口。 */
+.calls-body{max-width:680px;width:100%;margin:0 auto;overflow-y:auto;padding:20px 24px 64px;overscroll-behavior:contain}
+.calls-intro{margin:8px 0 28px}
+.calls-intro>svg{width:32px;height:32px;color:var(--blue)}
+.calls-intro h2{margin:12px 0 8px;font-size:24px;letter-spacing:-.04em}
+.calls-intro p,.calls-empty p,.calls-hint{color:var(--muted);font-size:13px;line-height:1.8}
+.call-device-current{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid var(--line)}
+.call-device-current strong,.call-device-list strong{display:block;font-size:15px}
+.call-device-current small,.call-device-list small{display:block;margin-top:6px;color:var(--muted);font-size:12px}
+.call-presence{width:9px;height:9px;flex:none;border-radius:50%;background:var(--muted)}
+.call-presence.online{background:#48b78b;box-shadow:0 0 0 4px #48b78b15}
+.call-presence.connecting{background:var(--amber)}
+.calls-list-title{display:flex;justify-content:space-between;margin:28px 0 8px;font-size:13px;font-weight:500;color:var(--muted)}
+.calls-list-title span{font-variant-numeric:tabular-nums}
+.call-device-list{margin:0;padding:0;list-style:none}
+.call-device-list li{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0;border-bottom:1px solid var(--line)}
+.call-device-list button,.calls-service-error button{min-height:42px;padding:0 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--blue);font-size:13px;font-weight:600}
+.call-device-list button:disabled{opacity:.45;cursor:default}
+.calls-empty{padding:28px 0;text-align:center}
+.calls-empty strong{font-size:15px}
+.calls-empty .save{margin-top:12px}
+.calls-service-error{padding:12px 0}
+.calls-service-error p,.call-error{color:var(--amber);font-size:13px;line-height:1.6}
+.calls-hint{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);font-size:12px}
+.call-notice{color:var(--muted);font-size:13px}
+.call-overlay{position:absolute;inset:0;z-index:45;display:flex;flex-direction:column;min-height:0;padding:max(22px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));background:#080f18;color:#f6f7f6;touch-action:manipulation}
+.call-heading{display:grid;gap:6px;flex:none;padding:0 8px 14px}
+.call-heading>span{color:#9aa7b4;font-size:11px}
+.call-heading strong{font-size:22px;letter-spacing:-.04em}
+.call-heading small{color:#9aa7b4;font-size:12px;line-height:1.5}
+.call-stage{position:relative;flex:1;min-height:0;overflow:hidden;border:1px solid #344151;border-radius:18px;background:#111e2c}
+.call-media{position:relative;width:100%;height:100%;min-height:0;background:#101a26}
+.call-media video{display:block;width:100%;height:100%;object-fit:contain}
+.call-local{position:absolute;right:12px;top:12px;width:clamp(88px,25%,150px);height:auto;aspect-ratio:3/4;overflow:hidden;border:1px solid #64788f;border-radius:12px;box-shadow:0 4px 18px #0005}
+.call-local video{object-fit:cover;transform:scaleX(-1)}
+.call-media-label{position:absolute;left:10px;bottom:10px;max-width:calc(100% - 20px);padding:4px 8px;border-radius:6px;background:#080f18bd;color:#f6f7f6;font-size:11px}
+.call-local .call-media-label{left:4px;bottom:4px;padding:3px 5px;font-size:10px}
+.call-camera-off,.call-waiting{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;color:#9aa7b4;text-align:center;font-size:13px}
+.call-camera-off svg,.call-waiting svg{width:40px;height:40px;color:#4e97ff}
+.call-local .call-camera-off{font-size:10px;padding:5px;gap:6px}
+.call-local .call-camera-off svg{width:22px;height:22px}
+.call-controls{display:flex;justify-content:center;flex:none;flex-wrap:wrap;gap:10px;padding:16px 0 0}
+.call-controls button,.call-play-audio{min-height:46px;padding:10px 18px;border:1px solid #344151;border-radius:14px;background:#243243;color:#f6f7f6;font-size:13px;font-weight:600}
+.call-controls button:disabled{opacity:.45;cursor:default}
+.call-controls .call-hangup{border-color:#a7424e;background:#a52d40}
+.call-controls .call-accept{border-color:#0765f6;background:#0765f6;min-width:110px}
+.call-controls button[aria-pressed=true]{background:#e3e9ef;color:#182533}
+.call-play-audio{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#0765f6;white-space:nowrap}
+.call-play-error{position:absolute;bottom:35px;left:12px;right:12px;color:#ffc66c;font-size:12px;text-align:center}
+.call-error{margin:8px 8px 0}
+.feedie.call-preview-layer{position:absolute;top:0;left:0;right:0;z-index:45;height:auto;min-height:0}
+.call-preview-layer .call-overlay{padding-top:64px;padding-bottom:26px}
+body:has(.call-overlay) .fullscreen-action{display:none}
+@media(min-width:650px) and (max-height:600px){
+ .calls-body{padding-top:4px}.calls-intro{margin:0 0 12px}.calls-intro>svg{display:none}.calls-intro h2{font-size:20px}.calls-intro p{margin:6px 0}.call-device-current{padding:10px 0}.calls-list-title{margin-top:18px}
+ .call-overlay{padding:12px 20px}.call-heading{padding-bottom:8px;grid-template-columns:auto 1fr;align-items:center;gap:4px 14px}.call-heading strong{font-size:18px}.call-heading small{grid-column:1/-1}.call-controls{padding-top:10px}.call-controls button{min-height:42px;padding:8px 18px}.call-local{width:120px;aspect-ratio:4/3}
+}

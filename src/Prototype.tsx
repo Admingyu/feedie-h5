@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type TouchEvent } from "react";
-import { ArrowRightIcon, ChevronLeftIcon, GearIcon, HamburgerMenuIcon, PlusIcon } from "@radix-ui/react-icons";
-import { BottomSheet, KeyboardInput, MobileScroll, useKeyboard } from "./mobile";
+import { ArrowRightIcon, ChevronLeftIcon, GearIcon, HamburgerMenuIcon, PlusIcon, VideoIcon } from "@radix-ui/react-icons";
+import type { RTKParticipant, RTKSelf } from "@cloudflare/realtimekit";
+import { createPortal } from "react-dom";
+import { BottomSheet, KeyboardInput, MobileScroll, useKeyboard, useScreenPortal, useMobileDevice } from "./mobile";
 import { ApiError, request, track, trackChanges, syncData, storeSnapshot, mergeSnapshots, type Snapshot } from "./sync";
 import { parseRecords } from "./import-records";
+import { useVideoCalls } from "./realtime";
 import "./prototype.css";
 
 type Entry = { id: string; at: string; ml: number };
@@ -100,7 +103,7 @@ function AuthDialog({preview, close, complete, hideKeyboard=()=>{}}: {preview:bo
   const [busy,setBusy]=useState(false);
   const Input = preview ? PreviewInput : "input";
   const submit=async(event:React.FormEvent)=>{event.preventDefault();setBusy(true);setError("");try{const user=await request<{id:string;email:string}>(register?"/api/register":"/api/login","POST",{email,password});hideKeyboard();complete(user);}catch(e){setError(e instanceof Error?e.message:"连接失败");}finally{setBusy(false);}};
-  const content=<div className="auth-content"><p>登录后同步喂养记录和设置。</p><form onSubmit={submit}><label>邮箱<Input type="email" required autoComplete="email" value={email} onChange={event=>setEmail(event.currentTarget.value)}/></label><div className="password-group"><label htmlFor="auth-password">密码</label><div className="password-field"><Input id="auth-password" type={showPassword?"text":"password"} required minLength={8} maxLength={128} autoComplete={register?"new-password":"current-password"} value={password} onChange={event=>setPassword(event.currentTarget.value)}/><button type="button" aria-label={showPassword?"隐藏密码":"显示密码"} onPointerDown={event=>event.preventDefault()} onClick={()=>setShowPassword(visible=>!visible)}>{showPassword?"隐藏":"显示"}</button></div></div>{error&&<p className="auth-error" role="alert">{error}</p>}<button className="save" disabled={busy} type="submit">{busy?"请稍候…":register?"注册并同步":"登录并同步"}</button></form><button className="auth-switch" type="button" onClick={()=>{hideKeyboard();setShowPassword(false);setRegister(!register);setError("");}}>{register?"已有账号？登录":"没有账号？注册"}</button></div>;
+  const content=<div className="auth-content"><p>登录后同步喂养记录和设置，并与其他设备视频通话。</p><form onSubmit={submit}><label>邮箱<Input type="email" required autoComplete="email" value={email} onChange={event=>setEmail(event.currentTarget.value)}/></label><div className="password-group"><label htmlFor="auth-password">密码</label><div className="password-field"><Input id="auth-password" type={showPassword?"text":"password"} required minLength={8} maxLength={128} autoComplete={register?"new-password":"current-password"} value={password} onChange={event=>setPassword(event.currentTarget.value)}/><button type="button" aria-label={showPassword?"隐藏密码":"显示密码"} onPointerDown={event=>event.preventDefault()} onClick={()=>setShowPassword(visible=>!visible)}>{showPassword?"隐藏":"显示"}</button></div></div>{error&&<p className="auth-error" role="alert">{error}</p>}<button className="save" disabled={busy} type="submit">{busy?"请稍候…":register?"注册并同步":"登录并同步"}</button></form><button className="auth-switch" type="button" onClick={()=>{hideKeyboard();setShowPassword(false);setRegister(!register);setError("");}}>{register?"已有账号？登录":"没有账号？注册"}</button></div>;
   if(preview)return <BottomSheet open onOpenChange={open=>{if(!open){hideKeyboard();close();}}} title={register?"创建账号":"登录以同步"}>{content}</BottomSheet>;
   return <div className="confirm-overlay auth-overlay"><section role="dialog" aria-modal="true" aria-label={register?"注册账号":"登录账号"}><header><h2>{register?"创建账号":"登录以同步"}</h2><button type="button" aria-label="关闭" onClick={close}>×</button></header>{content}</section></div>;
 }
@@ -111,11 +114,80 @@ function PreviewAuthDialog(props:{close:()=>void;complete:(user:{id:string;email
   return <AuthDialog {...props} preview hideKeyboard={keyboard.hide}/>;
 }
 
+/** 显示单个参与者的视频与远端音频；播放受浏览器限制时提供明确的手动开启入口。 */
+function CallMedia({participant, local=false}: {participant:RTKParticipant|RTKSelf;local?:boolean}) {
+  const videoRef=useRef<HTMLVideoElement>(null);
+  const audioRef=useRef<HTMLAudioElement>(null);
+  const [blocked,setBlocked]=useState(false);
+  const [playError,setPlayError]=useState("");
+  const {videoEnabled,videoTrack,audioEnabled,audioTrack}=participant;
+  useEffect(()=>{
+    const video=videoRef.current;
+    if(!video)return;
+    if(local)(participant as RTKSelf).registerVideoElement(video,true);
+    else participant.registerVideoElement(video);
+    return()=>{if(local)(participant as RTKSelf).deregisterVideoElement(video,true);else participant.deregisterVideoElement(video);video.srcObject=null;};
+  },[participant,local,videoTrack,videoEnabled]);
+  useEffect(()=>{
+    const audio=audioRef.current;
+    if(!audio||local||!audioEnabled||!audioTrack)return;
+    let cancelled=false;
+    audio.srcObject=new MediaStream([audioTrack]);
+    setBlocked(false);setPlayError("");
+    void audio.play().catch(error=>{if(cancelled)return;if(error.name==="NotAllowedError")setBlocked(true);else setPlayError("无法播放对方声音，请检查设备音频输出");});
+    return()=>{cancelled=true;audio.pause();audio.srcObject=null;};
+  },[participant,local,audioEnabled,audioTrack]);
+  /** 用户点击恢复声音播放，使 Safari/Chrome 的自动播放限制可见且可处理。 */
+  const playAudio=async()=>{try{await audioRef.current?.play();setBlocked(false);setPlayError("");}catch{setPlayError("无法播放声音，请检查浏览器和设备音量");}};
+  return <div className={`call-media${local?" call-local":""}`}>
+    <video ref={videoRef} autoPlay muted playsInline aria-label={local?"本机视频":"对方视频"} style={{opacity:videoEnabled?1:0}}/>
+    {!videoEnabled&&<div className="call-camera-off"><VideoIcon/><span>{local?"摄像头已关闭":"等待对方画面"}</span></div>}
+    {!local&&<audio ref={audioRef} autoPlay/>}
+    <span className="call-media-label">{local?"我":participant.name}{!audioEnabled&&" · 已静音"}</span>
+    {blocked&&<button className="call-play-audio" type="button" onClick={()=>void playAudio()}>轻触开启声音</button>}
+    {playError&&<p className="call-play-error" role="alert">{playError}</p>}
+  </div>;
+}
+
+/** 呼叫浮层保持在应用内部；来电、连接与通话共享明确的挂断入口。 */
+function VideoCallPanel({video}: {video:ReturnType<typeof useVideoCalls>}) {
+  const [busy,setBusy]=useState(false);
+  const dialogRef=useRef<HTMLElement>(null);
+  useEffect(()=>{dialogRef.current?.focus();},[]);
+  if(!video.call)return null;
+  const {call,meeting}=video;
+  const remote=meeting?.participants.joined.toArray()[0];
+  /** 避免连续点击音视频开关产生竞态；失败信息由 hook 展示。 */
+  const toggle=async(kind:"audio"|"video")=>{setBusy(true);try{await video.toggle(kind);}finally{setBusy(false);}};
+  return <section ref={dialogRef} tabIndex={-1} className="call-overlay" role="dialog" aria-modal="true" aria-label="视频通话">
+    <header className="call-heading"><span>视频通话</span><strong>{call.peer}</strong><small>{call.phase==="incoming"?"邀请你进行视频通话":call.phase==="calling"?"正在呼叫…":call.phase==="connecting"?"正在连接，请允许摄像头和麦克风访问…":"通话中"}</small></header>
+    <div className="call-stage">
+      {remote?<CallMedia participant={remote}/>:<div className="call-waiting"><VideoIcon/><p>{call.phase==="incoming"?"接听后开启摄像头和麦克风":call.phase==="active"?"等待对方进入通话":"让陪伴近一点"}</p></div>}
+      {meeting&&<CallMedia participant={meeting.self} local/>}
+    </div>
+    {video.error&&<p className="call-error" role="alert">{video.error}</p>}
+    <footer className="call-controls">
+      {call.phase==="incoming"&&<button type="button" className="call-accept" onClick={video.accept}>接听</button>}
+      {call.phase==="active"&&meeting&&<><button type="button" disabled={busy} aria-pressed={!meeting.self.audioEnabled} onClick={()=>void toggle("audio")}>{meeting.self.audioEnabled?"静音":"取消静音"}</button><button type="button" disabled={busy} aria-pressed={!meeting.self.videoEnabled} onClick={()=>void toggle("video")}>{meeting.self.videoEnabled?"关闭摄像头":"开启摄像头"}</button></>}
+      <button type="button" className="call-hangup" disabled={call.id==="pending"} onClick={video.end}>{call.phase==="incoming"?"拒绝":call.phase==="calling"?"取消呼叫":"挂断"}</button>
+    </footer>
+  </section>;
+}
+
+/** 受保护手机预览中的通话挂载到屏幕 portal，独立于滚动内容并保留设备安全区。 */
+function PreviewVideoCallPanel({video,dark}: {video:ReturnType<typeof useVideoCalls>;dark:boolean}) {
+  const {screenRef}=useScreenPortal();
+  const {device}=useMobileDevice();
+  if(!screenRef.current)return null;
+  return createPortal(<div className={`feedie call-preview-layer ${dark?"dark":"light"}`} style={{bottom:device.geometry.safeArea.bottom}}><VideoCallPanel video={video}/></div>,screenRef.current);
+}
+
 // 喂养数据和偏好通过本机快照同步，离线时仍可正常记录。
-export function FeedieApp({preview=false}: {preview?:boolean}) {
+export function FeedieApp({preview=false,hideKeyboard}: {preview?:boolean;hideKeyboard?:()=>void}) {
   const [prefs,setPrefs]=useState<Prefs>(()=>demo?{...defaults,theme:"dark"}:{...defaults,...getSaved("feedie.prefs",{})});
   const [entries,setEntries]=useState<Entry[]>(seed);
   const [user,setUser]=useState<{id:string;email:string}|null>(null);
+  const video=useVideoCalls(demo?undefined:user?.id);
   const [authOpen,setAuthOpen]=useState(false);
   const [syncBusy,setSyncBusy]=useState(false);
   const [syncMessage,setSyncMessage]=useState("");
@@ -147,17 +219,21 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
     return merged;
   }
   const [now,setNow]=useState(()=>new Date());
-  const [page,setPage]=useState<"home"|"history"|"settings">("home");
+  const [page,setPage]=useState<"home"|"history"|"settings"|"calls">("home");
   const [ml,setMl]=useState(prefs.ml);
   const [sleeping,setSleeping]=useState(false);
   const [draft,setDraft]=useState<Draft|null>(null);
   const [confirmDelete,setConfirmDelete]=useState(false);
   const [undo,setUndo]=useState<Entry|null>(null);
   const [toast,setToast]=useState("");
+  // 来电可发生在任意页面，结束或失败信息也应在当前页面可见。
+  useEffect(()=>{if(!video.notice)return;setToast(video.error||video.notice);const timer=window.setTimeout(()=>setToast(""),6000);return()=>clearTimeout(timer);},[video.notice,video.error]);
   const idleRef=useRef<number|null>(null);
   const undoRef=useRef<number|null>(null);
   const wakeRef=useRef<{release:()=>Promise<void>}|null>(null);
   const swipeRef=useRef<{x:number;y:number}|null>(null);
+  // 来电在主屏睡眠遮罩上方显示，并在展示前收起模拟键盘；通话期间不进入页面睡眠。
+  useEffect(()=>{if(video.call){hideKeyboard?.();setSleeping(false);}},[video.call?.id,hideKeyboard]);
   useEffect(()=>{const id=window.setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(id);},[]);
   useEffect(()=>{if(!demo)localStorage.setItem("feedie.entries",JSON.stringify(entries));},[entries]);
   useEffect(()=>{if(!demo)localStorage.setItem("feedie.prefs",JSON.stringify(prefs));},[prefs]);
@@ -236,7 +312,7 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
     return()=>{cancelled=true;scheduleSyncRef.current=()=>{};syncNowRef.current=()=>{};if(timer!==undefined)clearTimeout(timer);clearInterval(poll);window.removeEventListener("online",resume);document.removeEventListener("visibilitychange",resume);};
   },[user]);
   useEffect(()=>{setMl(prefs.ml);},[prefs.ml]);
-  useEffect(()=>{const reset=()=>{if(sleeping)return;if(idleRef.current)clearTimeout(idleRef.current);if(prefs.sleep&&page==="home"&&!draft)idleRef.current=window.setTimeout(()=>setSleeping(true),prefs.sleep*1000);};reset();window.addEventListener("pointerdown",reset);window.addEventListener("keydown",reset);return()=>{window.removeEventListener("pointerdown",reset);window.removeEventListener("keydown",reset);if(idleRef.current)clearTimeout(idleRef.current);};},[prefs.sleep,page,draft,sleeping]);
+  useEffect(()=>{const reset=()=>{if(sleeping)return;if(idleRef.current)clearTimeout(idleRef.current);if(prefs.sleep&&page==="home"&&!draft&&!video.call)idleRef.current=window.setTimeout(()=>setSleeping(true),prefs.sleep*1000);};reset();window.addEventListener("pointerdown",reset);window.addEventListener("keydown",reset);return()=>{window.removeEventListener("pointerdown",reset);window.removeEventListener("keydown",reset);if(idleRef.current)clearTimeout(idleRef.current);};},[prefs.sleep,page,draft,sleeping,Boolean(video.call)]);
   useEffect(()=>{
     let cancelled=false;
     const sync=async()=>{
@@ -298,7 +374,7 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   };
   const exportEntries=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({version:1,entries:sorted,prefs},null,2)],{type:"application/json"}));const link=document.createElement("a");link.href=url;link.download=`feedie-${dayKey(new Date())}.json`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);};
   const onTouchStart=(e:TouchEvent<HTMLDivElement>)=>{const t=e.touches[0];if(t)swipeRef.current={x:t.clientX,y:t.clientY};};
-  const onTouchEnd=(e:TouchEvent<HTMLDivElement>)=>{const start=swipeRef.current,t=e.changedTouches[0];swipeRef.current=null;if(!start||!t||sleeping||draft)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.abs(dx)<64||Math.abs(dx)<Math.abs(dy)*1.3)return;if(page==="home"&&start.x<32&&dx>0)setPage("history");if(page==="history"&&dx<0)setPage("home");};
+  const onTouchEnd=(e:TouchEvent<HTMLDivElement>)=>{const start=swipeRef.current,t=e.changedTouches[0];swipeRef.current=null;if(!start||!t||sleeping||draft||video.call)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.abs(dx)<64||Math.abs(dx)<Math.abs(dy)*1.3)return;if(page==="home"&&start.x<32&&dx>0)setPage("history");if(page==="history"&&dx<0)setPage("home");};
   const dateOptions=Array.from({length:14},(_,i)=>{const date=new Date(now);date.setDate(date.getDate()-i);return dayKey(date);});
   const changeBirthDate=(value:string)=>{
     if(value&&(!isDateKey(value)||value>todayKey)){setToast("出生日期不能晚于今天");window.setTimeout(()=>setToast(""),2200);return;}
@@ -308,9 +384,50 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   };
   if(draft&&!dateOptions.includes(draft.day))dateOptions.push(draft.day);
   return <div className={`feedie ${dark?"dark":"light"}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} data-testid="feedie-app">
-    {page==="home"&&<main className="home" aria-label="喂养状态"><nav className="home-actions" aria-label="常用操作"><button type="button" className="home-action edge-settings" onClick={()=>setPage("settings")} aria-label="打开设置"><GearIcon/><span>设置</span></button><button type="button" className="home-action edge-history" onClick={()=>setPage("history")} aria-label="查看喂养记录"><HamburgerMenuIcon/><span>记录</span></button></nav><section className="home-left"><header className="home-header"><div className="brand">Quiet Gauge<small>记住每一次温柔的守护</small></div><div className="today"><span>{dayKey(now)} · {["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][now.getDay()]}</span><strong>今日 {todayTotal} mL</strong>{(user||syncMessage)&&<small className="sync-indicator">{syncBusy?"同步中":syncMessage==="已同步"?"已同步":syncMessage.includes("离线")?"离线 · 待同步":syncMessage.includes("等待")?"等待同步":syncMessage?"同步待处理":"准备同步"}</small>}</div></header><div className="clock"><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="last-landscape"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></section><section className="home-right"><div className="interval"><span className="caption">已间隔</span><strong className="elapsed">{last?spanText(elapsed):"尚未开始"}</strong><span className={`due ${remaining!==null&&remaining<=prefs.advance?"alert":""}`} aria-live="polite">{dueCopy}</span><div className="timeline-labels"><span>上次喂养<strong>{last?hhmm(last):"—"}</strong></span><span>下次喂养<strong>{due?hhmm(due):"—"}</strong></span></div><div className="progress" role="progressbar" aria-label="喂养提醒进度" aria-valuenow={Math.round(ratio*100)} aria-valuemin={0} aria-valuemax={100}><span style={{width:`${ratio*100}%`}}/><i style={{left:`${ratio*100}%`}}/></div><div className="scale"><span>0</span><span>{spanText(prefs.interval)}</span></div><div className="last-portrait"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></div><div className="entry"><div className="entry-amount"><AmountSlider value={currentFeedMl} max={sliderMax} change={setMl} complete={saveNow}/></div></div></section></main>}
-    {page==="history"&&<main className="inner history" aria-label="喂养记录"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>喂养记录</h1><span/></header><div className="history-body"><div className="history-top"><strong>{sorted.length}</strong><span>条记录</span><button type="button" onClick={()=>openDraft()}><PlusIcon/> 补录</button></div>{sorted.length?<div className="record-list">{sorted.map((item,index)=>{const date=new Date(item.at),key=dayKey(date),prev=sorted[index-1];return <div key={item.id}>{(!prev||dayKey(new Date(prev.at))!==key)&&<h2><span>{key}</span><strong>合计 {dailyTotals.get(key)??0} mL</strong></h2>}<button type="button" className="record-row" onClick={()=>openDraft(item)}><time>{hhmm(date)}</time><span>{item.ml} mL</span><b>›</b></button></div>;})}</div>:<div className="empty"><strong>还没有喂养记录</strong><span>可在主屏滑动记录，或点「补录」。</span></div>}</div></main>}
-    {page==="settings"&&<main className="inner settings" aria-label="设置"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>设置</h1><span/></header><div className="settings-body"><section><h2>喂养</h2><label className="setting-row"><div><strong>宝宝出生日期</strong><small>用于计算主屏月龄参考上限</small></div><input className="date-setting" type="date" aria-label="宝宝出生日期" max={todayKey} value={isDateKey(prefs.birthDate)&&prefs.birthDate<=todayKey?prefs.birthDate:""} onChange={event=>changeBirthDate(event.currentTarget.value)}/></label><div className="setting-row"><div><strong>默认奶量</strong><small>记录前可临时调整</small></div><Stepper value={prefs.ml} change={v=>changePref("ml",v)} min={10} label="默认奶量"/></div><div className="setting-row"><div><strong>提醒间隔</strong><small>从上次喂养时间开始</small></div><Stepper value={prefs.interval} change={v=>changePref("interval",v)} min={30} max={360} step={15} unit="分" label="提醒间隔"/></div><div className="setting-row"><div><strong>提前提示</strong></div><select aria-label="提前提示" value={prefs.advance} onChange={e=>changePref("advance",Number(e.target.value))}><option value={0}>不提前</option><option value={10}>10 分钟</option><option value={15}>15 分钟</option><option value={30}>30 分钟</option></select></div></section><section><h2>显示</h2><div className="theme-setting"><strong>主题模式</strong><small>自动按本地时间 07:00–19:00 切换</small><div className="segmented" role="group" aria-label="主题模式">{(["auto","light","dark"] as const).map(value=><button key={value} type="button" aria-pressed={prefs.theme===value} onClick={()=>changePref("theme",value)}>{value==="auto"?"自动":value==="light"?"亮色":"暗色"}</button>)}</div></div><div className="setting-row"><div><strong>睡眠模式</strong><small>无操作后仅显示时间</small></div><select aria-label="屏幕超时" value={prefs.sleep} onChange={e=>changePref("sleep",Number(e.target.value))}><option value={0}>关闭</option><option value={30}>30 秒</option><option value={60}>1 分钟</option><option value={120}>2 分钟</option><option value={300}>5 分钟</option></select></div><div className="setting-row"><div><strong>保持屏幕常亮</strong><small>页面打开时尝试阻止系统锁屏</small></div><button type="button" className="switch" role="switch" aria-checked={prefs.keepAwake} onClick={()=>changePref("keepAwake",!prefs.keepAwake)}><span/></button></div></section><section><h2>数据</h2><button className="export" type="button" disabled={syncBusy||importBusy||demo} onClick={()=>user?syncNowRef.current():setAuthOpen(true)}>{syncBusy?"正在同步…":user?"立即同步":"登录以同步"}<span>›</span></button>{user&&<><p>已登录：{user.email}</p><button className="export" type="button" onClick={async()=>{try{await request("/api/logout","POST");setUser(null);setSyncMessage("已退出登录");}catch(e){setSyncMessage(e instanceof Error?e.message:"退出失败");}}}>退出登录 <span>›</span></button></>}{syncMessage&&<p role="status">{syncMessage}</p>}<label className={`export import-action${syncBusy||importBusy||demo?" disabled":""}`}> {importBusy?"正在导入…":"导入记录 JSON"}<span aria-hidden="true">›</span><input type="file" accept=".json,application/json" disabled={syncBusy||importBusy||demo} aria-label="导入记录 JSON" onChange={importEntries}/></label>{importMessage&&<p role="status">{importMessage}</p>}<button className="export" type="button" onClick={exportEntries}>导出记录 JSON <span>›</span></button><p>记录保存在当前浏览器；登录后会自动同步到其他设备。</p></section></div></main>}
+    {page==="home"&&<main inert={Boolean(video.call)} className="home" aria-label="喂养状态"><nav className="home-actions" aria-label="常用操作"><button type="button" className="home-action edge-settings" onClick={()=>setPage("settings")} aria-label="打开设置"><GearIcon/><span>设置</span></button><button type="button" className="home-action edge-history" onClick={()=>setPage("history")} aria-label="查看喂养记录"><HamburgerMenuIcon/><span>记录</span></button><button type="button" className="home-action edge-video" aria-label="打开视频通话" onClick={()=>{hideKeyboard?.();setPage("calls");}}><VideoIcon/><span>视频</span></button></nav><section className="home-left"><header className="home-header"><div className="brand">Quiet Gauge<small>记住每一次温柔的守护</small></div><div className="today"><span>{dayKey(now)} · {["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][now.getDay()]}</span><strong>今日 {todayTotal} mL</strong>{(user||syncMessage)&&<small className="sync-indicator">{syncBusy?"同步中":syncMessage==="已同步"?"已同步":syncMessage.includes("离线")?"离线 · 待同步":syncMessage.includes("等待")?"等待同步":syncMessage?"同步待处理":"准备同步"}</small>}</div></header><div className="clock"><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="last-landscape"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></section><section className="home-right"><div className="interval"><span className="caption">已间隔</span><strong className="elapsed">{last?spanText(elapsed):"尚未开始"}</strong><span className={`due ${remaining!==null&&remaining<=prefs.advance?"alert":""}`} aria-live="polite">{dueCopy}</span><div className="timeline-labels"><span>上次喂养<strong>{last?hhmm(last):"—"}</strong></span><span>下次喂养<strong>{due?hhmm(due):"—"}</strong></span></div><div className="progress" role="progressbar" aria-label="喂养提醒进度" aria-valuenow={Math.round(ratio*100)} aria-valuemin={0} aria-valuemax={100}><span style={{width:`${ratio*100}%`}}/><i style={{left:`${ratio*100}%`}}/></div><div className="scale"><span>0</span><span>{spanText(prefs.interval)}</span></div><div className="last-portrait"><span>上次喂养</span><strong>{last?`${hhmm(last)} · ${latest.ml} mL`:"尚无记录"}</strong></div></div><div className="entry"><div className="entry-amount"><AmountSlider value={currentFeedMl} max={sliderMax} change={setMl} complete={saveNow}/></div></div></section></main>}
+    {page==="history"&&<main inert={Boolean(video.call)} className="inner history" aria-label="喂养记录"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>喂养记录</h1><span/></header><div className="history-body"><div className="history-top"><strong>{sorted.length}</strong><span>条记录</span><button type="button" onClick={()=>openDraft()}><PlusIcon/> 补录</button></div>{sorted.length?<div className="record-list">{sorted.map((item,index)=>{const date=new Date(item.at),key=dayKey(date),prev=sorted[index-1];return <div key={item.id}>{(!prev||dayKey(new Date(prev.at))!==key)&&<h2><span>{key}</span><strong>合计 {dailyTotals.get(key)??0} mL</strong></h2>}<button type="button" className="record-row" onClick={()=>openDraft(item)}><time>{hhmm(date)}</time><span>{item.ml} mL</span><b>›</b></button></div>;})}</div>:<div className="empty"><strong>还没有喂养记录</strong><span>可在主屏滑动记录，或点「补录」。</span></div>}</div></main>}
+    {page==="settings"&&<main inert={Boolean(video.call)} className="inner settings" aria-label="设置"><header className="inner-header"><button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button><h1>设置</h1><span/></header><div className="settings-body"><section><h2>喂养</h2><label className="setting-row"><div><strong>宝宝出生日期</strong><small>用于计算主屏月龄参考上限</small></div><input className="date-setting" type="date" aria-label="宝宝出生日期" max={todayKey} value={isDateKey(prefs.birthDate)&&prefs.birthDate<=todayKey?prefs.birthDate:""} onChange={event=>changeBirthDate(event.currentTarget.value)}/></label><div className="setting-row"><div><strong>默认奶量</strong><small>记录前可临时调整</small></div><Stepper value={prefs.ml} change={v=>changePref("ml",v)} min={10} label="默认奶量"/></div><div className="setting-row"><div><strong>提醒间隔</strong><small>从上次喂养时间开始</small></div><Stepper value={prefs.interval} change={v=>changePref("interval",v)} min={30} max={360} step={15} unit="分" label="提醒间隔"/></div><div className="setting-row"><div><strong>提前提示</strong></div><select aria-label="提前提示" value={prefs.advance} onChange={e=>changePref("advance",Number(e.target.value))}><option value={0}>不提前</option><option value={10}>10 分钟</option><option value={15}>15 分钟</option><option value={30}>30 分钟</option></select></div></section><section><h2>显示</h2><div className="theme-setting"><strong>主题模式</strong><small>自动按本地时间 07:00–19:00 切换</small><div className="segmented" role="group" aria-label="主题模式">{(["auto","light","dark"] as const).map(value=><button key={value} type="button" aria-pressed={prefs.theme===value} onClick={()=>changePref("theme",value)}>{value==="auto"?"自动":value==="light"?"亮色":"暗色"}</button>)}</div></div><div className="setting-row"><div><strong>睡眠模式</strong><small>无操作后仅显示时间</small></div><select aria-label="屏幕超时" value={prefs.sleep} onChange={e=>changePref("sleep",Number(e.target.value))}><option value={0}>关闭</option><option value={30}>30 秒</option><option value={60}>1 分钟</option><option value={120}>2 分钟</option><option value={300}>5 分钟</option></select></div><div className="setting-row"><div><strong>保持屏幕常亮</strong><small>页面打开时尝试阻止系统锁屏</small></div><button type="button" className="switch" role="switch" aria-checked={prefs.keepAwake} onClick={()=>changePref("keepAwake",!prefs.keepAwake)}><span/></button></div></section><section><h2>数据</h2><button className="export" type="button" disabled={syncBusy||importBusy||demo} onClick={()=>user?syncNowRef.current():setAuthOpen(true)}>{syncBusy?"正在同步…":user?"立即同步":"登录以同步"}<span>›</span></button>{user&&<><p>已登录：{user.email}</p><button className="export" type="button" onClick={async()=>{try{await request("/api/logout","POST");setUser(null);setSyncMessage("已退出登录");}catch(e){setSyncMessage(e instanceof Error?e.message:"退出失败");}}}>退出登录 <span>›</span></button></>}{syncMessage&&<p role="status">{syncMessage}</p>}<label className={`export import-action${syncBusy||importBusy||demo?" disabled":""}`}> {importBusy?"正在导入…":"导入记录 JSON"}<span aria-hidden="true">›</span><input type="file" accept=".json,application/json" disabled={syncBusy||importBusy||demo} aria-label="导入记录 JSON" onChange={importEntries}/></label>{importMessage&&<p role="status">{importMessage}</p>}<button className="export" type="button" onClick={exportEntries}>导出记录 JSON <span>›</span></button><p>记录保存在当前浏览器；登录后会自动同步到其他设备。</p></section></div></main>}
+    {page==="calls"&&<main inert={Boolean(video.call)} className="inner calls-page" aria-label="通话设备">
+      <header className="inner-header">
+        <button type="button" aria-label="返回主页" onClick={()=>setPage("home")}><ChevronLeftIcon/></button>
+        <h1>视频通话</h1><span/>
+      </header>
+      <div className="calls-body">
+        <div className="calls-intro">
+          <VideoIcon/><h2>与另一端，面对面</h2>
+          <p>在其他设备打开 Feedie，登录同一账号即可通话。</p>
+        </div>
+        {!user?<div className="calls-empty">
+          <p>{demo?"示例模式暂不支持视频通话":"登录后查看其他在线设备"}</p>
+          <button type="button" className="save" disabled={demo} onClick={()=>{hideKeyboard?.();setAuthOpen(true);}}>登录账号</button>
+        </div>:<>
+          <div className="call-device-current">
+            <span className={`call-presence ${video.status}`}/>
+            <div>
+              <strong>本机 · {video.deviceName}</strong>
+              <small>{video.status==="online"?"已连接，保持页面打开以接听":video.status==="connecting"?"正在连接…":"尚未连接"}</small>
+            </div>
+          </div>
+          {video.error&&<div className="calls-service-error">
+            <p role="alert">{video.error}</p>
+            {video.status==="offline"&&<button type="button" onClick={video.reconnect}>重新连接</button>}
+          </div>}
+          {video.notice&&<p className="call-notice" role="status">{video.notice}</p>}
+          <h2 className="calls-list-title">其他在线设备 <span>{video.devices.length}</span></h2>
+          {video.devices.length?<ul className="call-device-list">
+            {video.devices.map(device=><li key={device.id}>
+              <div><strong>{device.name}</strong><small>{device.busy?"正在通话":"在线"}</small></div>
+              <button type="button" disabled={video.status!=="online"||device.busy||Boolean(video.call)} onClick={()=>{hideKeyboard?.();video.start(device);}}>呼叫</button>
+            </li>)}
+          </ul>:<div className="calls-empty">
+            <strong>暂未发现其他设备</strong>
+            <p>请确认另一台设备已登录同一账号，并保持页面在前台。</p>
+          </div>}
+        </>}
+        <p className="calls-hint">视频和声音将在接听后开启。手机锁屏或切到后台可能中断连接。</p>
+      </div>
+    </main>}
+    {video.call&&(preview?<PreviewVideoCallPanel video={video} dark={dark}/>:<VideoCallPanel video={video}/>)}
     {authOpen&&(preview?<PreviewAuthDialog close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);}}/>:<AuthDialog preview={false} close={()=>setAuthOpen(false)} complete={account=>{setUser(account);setAuthOpen(false);}}/>)}
     {sleeping&&page==="home"&&<button type="button" className="sleep" aria-label="轻触唤醒主屏" onClick={()=>setSleeping(false)}><div className="sleep-clock"><span>当前时间</span><time dateTime={now.toISOString()}>{hhmm(now)}</time></div><div className="sleep-interval"><span>距上次喂养</span><strong>{last?spanText(elapsed):"尚无记录"}</strong></div><small>轻触唤醒</small></button>}
     {draft&&<div className="overlay" onClick={()=>setDraft(null)}><section className="editor" role="dialog" aria-modal="true" aria-label={draft.id?"修改喂养记录":"补录喂养"} onClick={e=>e.stopPropagation()}><header><h2>{draft.id?"修改记录":"补录喂养"}</h2><button type="button" aria-label="关闭" onClick={()=>setDraft(null)}>×</button></header><label className="edit-row">日期<select aria-label="日期" value={draft.day} onChange={e=>setDraft({...draft,day:e.target.value})}>{dateOptions.map(d=><option key={d} value={d}>{d}</option>)}</select></label><div className="edit-row">时间<div className="time-select"><select aria-label="小时" value={draft.hour} onChange={e=>setDraft({...draft,hour:Number(e.target.value)})}>{Array.from({length:24},(_,n)=><option key={n} value={n}>{String(n).padStart(2,"0")}</option>)}</select>:<select aria-label="分钟" value={draft.minute} onChange={e=>setDraft({...draft,minute:Number(e.target.value)})}>{Array.from({length:60},(_,n)=><option key={n} value={n}>{String(n).padStart(2,"0")}</option>)}</select></div></div><div className="edit-row">喂养奶量<Stepper value={draft.ml} change={v=>setDraft({...draft,ml:v})} label="记录奶量"/></div><button className="save" type="button" onClick={saveDraft}>保存记录</button>{draft.id&&<button className="delete" type="button" onClick={()=>setConfirmDelete(true)}>删除这条记录</button>}</section></div>}
@@ -319,5 +436,6 @@ export function FeedieApp({preview=false}: {preview?:boolean}) {
   </div>;
 }
 
-export default function Prototype(){return <MobileScroll className="feedie-scroll"><FeedieApp preview/></MobileScroll>;}
+// 预览路由与来电浮层使用受保护运行时的键盘关闭接口。
+export default function Prototype(){const keyboard=useKeyboard();return <MobileScroll className="feedie-scroll"><FeedieApp preview hideKeyboard={keyboard.hide}/></MobileScroll>;}
 

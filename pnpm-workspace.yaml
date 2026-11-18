@@ -1,0 +1,4 @@
+# Wrangler 的本地运行和打包需要这两个已固定版本依赖的原生安装脚本。
+allowBuilds:
+  esbuild: true
+  workerd: true

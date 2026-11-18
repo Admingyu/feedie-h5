@@ -2,6 +2,7 @@
 
 ## Feedie design decisions
 
+- Use Cloudflare RealtimeKit for same-account, cross-device video calls. Keep device presence separate from joining a meeting; join only after manual acceptance, and deactivate the meeting when the call ends.
 - Group Settings and Records as adjacent operation controls at the upper-left edge of the home screen, with Settings above Records. Settings is a home-level destination and returns to Home; do not nest it inside History.
 
 - The selected visual direction is the third Product Design concept, Quiet Gauge: pale stone, dark condensed numerals, cobalt progress and recording control, and restrained amber reminder cues.

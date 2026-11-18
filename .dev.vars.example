@@ -1,0 +1,5 @@
+# 复制为 .dev.vars；真实密钥仅保存在忽略文件或 Workers Secrets 中。
+# 初始化应用与专用 preset：node --env-file=.dev.vars scripts/setup-realtimekit.mjs
+REALTIMEKIT_ACCOUNT_ID=
+REALTIMEKIT_APP_ID=
+REALTIMEKIT_API_TOKEN=

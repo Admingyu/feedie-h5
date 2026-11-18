@@ -10,6 +10,7 @@ Feedie 是一款移动端婴儿喂养记录 H5 原型，支持竖屏和横屏。
 - 配置默认奶量、提醒间隔、提前提示、主题、睡眠模式与屏幕常亮。
 - 在当前浏览器保存记录，并支持 JSON 导入和导出。
 - 横屏主屏采用双栏布局。
+- 同账号在线设备之间的视频呼叫、接听、静音和挂断（需配置 Cloudflare RealtimeKit）。
 
 ## 开发与构建
 
@@ -67,3 +68,50 @@ pnpm run build:h5
 本地手动部署时先运行 `pnpm run build`，再运行 `pnpm run deploy`。直接运行 `npx wrangler deploy` 不会自动执行 D1 迁移。
 
 本地调试可先执行 `npx wrangler d1 migrations apply DB --local`，然后运行 `pnpm run build` 和 `npx wrangler dev --local`。本地数据库和线上数据库互不影响。Cloudflare Pages 的纯静态构建无法提供登录和同步 API，需要使用 Worker 部署。
+
+## 视频通话：Cloudflare RealtimeKit
+
+首页左侧「视频」查看同账号的其他在线设备；双方保持页面打开，由对方手动接听。支持静音、关闭摄像头和挂断，浏览器阻止声音自动播放时显示「轻触开启声音」。每个标签页是一个独立通话端，一个账号同时进行一通一对一通话。手机锁屏、后台运行和关闭网页后的可靠接听不在 H5 支持范围内。
+
+Worker 复用现有登录 Cookie，按账号将设备连接路由到 SQLite Durable Object。设备待机和响铃不加入会议；接听后才创建本次会议与两份独立参与者令牌。挂断时本机立即停止采集，服务端将会议设为 `INACTIVE`，阻止旧令牌重新加入。未接听 45 秒、连接准备超过 60 秒或心跳丢失会结束通话；网络消失的清理可能延迟至约 105 秒。云端关闭请求失败时保留清理状态并重试，期间不能新建通话。
+
+### 配置服务
+
+使用 Node.js 22.12 或以上。创建一个限定到当前 Cloudflare 账号、拥有 **Realtime Admin** 权限的 API Token；它只保存在服务端，不写入 `VITE_*` 或浏览器存储。
+
+```sh
+# 建立不入库的本地配置，填入 ACCOUNT_ID 和 API_TOKEN；已有应用时也填 APP_ID。
+cp .dev.vars.example .dev.vars
+
+# 创建应用（如果 APP_ID 为空）并创建/校准最小权限 feedie-call 角色。
+pnpm run setup:realtimekit
+```
+
+脚本会输出非敏感的应用 ID，将它填入 `.dev.vars` 的 `REALTIMEKIT_APP_ID`。脚本不会部署 Worker，也不会开通录制、转录或升级套餐。首次创建应用后请保留该 ID，重新运行时会复用已填写的应用。
+
+线上 Worker 的 **Settings → Variables and Secrets** 需要以下三个配置，也可在 Wrangler 登录后逐项录入：
+
+```sh
+# 每条命令在交互提示中输入对应值；不要把真实密钥放在命令参数或提交到 Git。
+pnpm exec wrangler secret put REALTIMEKIT_ACCOUNT_ID
+pnpm exec wrangler secret put REALTIMEKIT_APP_ID
+pnpm exec wrangler secret put REALTIMEKIT_API_TOKEN
+```
+
+`wrangler.jsonc` 已包含 `CALL_ROOMS` 绑定与 SQLite 类迁移，可用于 Workers Free。构建并部署新版本时会创建该绑定；没有配置凭据时，喂养和同步功能仍可使用，视频页面明确显示服务尚未启用。
+
+### 本地验证
+
+```sh
+# 使用隔离的本地数据库，迁移后构建 H5，再启动带 API 的 Worker 预览。
+pnpm exec wrangler d1 migrations apply DB --local
+pnpm run build
+pnpm run dev:worker
+
+# 在真实 workerd/D1/DO 中验证呼叫权限、设备隔离和生命周期；外部供应商接口被隔离替代。
+pnpm run test:calls
+```
+
+打开本地 Worker 后，在两个浏览器或设备上登录同一账号测试。仅运行 Vite 的 `pnpm run dev` 不提供 Worker API。真实设备需要可访问的 HTTPS 地址及摄像头、麦克风权限。
+
+RealtimeKit 独立于 Workers 计费；配额由整个 Cloudflare 账号共享。参见[当前价目表](https://developers.cloudflare.com/realtime/realtimekit/platform/pricing/)。实现与 SDK 核对见 [接入笔记](docs/realtimekit-integration-notes.md)。
